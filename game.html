@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Summer Adventure - Top Down Game</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        background-color: #2c3e50;
+        font-family: Arial, sans-serif;
+      }
+
+      .container {
+        text-align: center;
+      }
+
+      h1 {
+        color: #ecf0f1;
+        margin-bottom: 10px;
+      }
+
+      .controls {
+        color: #bdc3c7;
+        margin-bottom: 15px;
+        font-size: 14px;
+      }
+
+      canvas {
+        border: 3px solid #34495e;
+        background-color: #95a5a6;
+        display: block;
+        margin: 10px auto;
+        image-rendering: pixelated;
+        image-rendering: crisp-edges;
+      }
+
+      .stats {
+        color: #ecf0f1;
+        margin-top: 10px;
+        font-size: 14px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🌞 Summer Adventure</h1>
+      <div class="controls">
+        <p>
+          <strong>Controls:</strong> WASD/Arrows to move | SPACE to slash |
+          1/2/3 to change character
+        </p>
+      </div>
+      <canvas id="gameCanvas" width="1024" height="768"></canvas>
+      <div class="stats">
+        <p id="stats">FPS: 0 | Enemies: 0 | Kills: 0</p>
+      </div>
+    </div>
+
+    <script>
+      // Game Constants
+      const TILE_SIZE = 64;
+      const WORLD_WIDTH = 16;
+      const WORLD_HEIGHT = 12;
+      const PLAYER_SPEED = 3;
+      const ENEMY_SPEED = 1.5;
+      const SLASH_RANGE = 1.5;
+      const SLASH_DURATION = 15;
+
+      // Canvas setup
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");
+
+      // Game state
+      const gameState = {
+        player: {
+          x: WORLD_WIDTH / 2,
+          y: WORLD_HEIGHT / 2,
+          width: 48,
+          height: 48,
+          vx: 0,
+          vy: 0,
+          direction: "down",
+          animationFrame: 0,
+          animationTimer: 0,
+          isMoving: false,
+          variant: 1,
+          slashing: false,
+          slashTimer: 0,
+          health: 100,
+          kills: 0,
+        },
+        camera: {
+          x: 0,
+          y: 0,
+        },
+        tiles: [],
+        gameObjects: [],
+        enemies: [],
+        particles: [],
+        keys: {},
+        enemySpawnTimer: 0,
+      };
+
+      // Image loading
+      const images = {
+        tiles: {},
+        sprites: {},
+        loaded: 0,
+        total: 0,
+      };
+
+      // Asset paths
+      const tilesetFolder =
+        "craftpix-net-381103-free-simple-summer-top-down-vector-tileset/PNG/";
+      const characterVariants = [1, 2, 3];
+      const spriteVariants = {};
+
+      // Load tileset images
+      function loadTileset() {
+        const tileNames = [
+          "Top-Down Simple Summer_Ground 01.png",
+          "Top-Down Simple Summer_Ground 02.png",
+          "Top-Down Simple Summer_Ground 03.png",
+          "Top-Down Simple Summer_Ground 04.png",
+          "Top-Down Simple Summer_Ground 05.png",
+          "Top-Down Simple Summer_Prop - House.png",
+          "Top-Down Simple Summer_Prop - Tree Medium.png",
+          "Top-Down Simple Summer_Prop - Rock 01.png",
+          "Top-Down Simple Summer_Prop - Wooden Barrel.png",
+        ];
+
+        tileNames.forEach((name) => {
+          const img = new Image();
+          img.src = tilesetFolder + name;
+          images.tiles[name] = img;
+          images.total++;
+          img.onload = () => images.loaded++;
+          img.onerror = () => {
+            console.warn("Failed to load tileset:", name);
+            images.total--;
+          };
+        });
+      }
+
+      // Load sprite animations for all character variants
+      function loadCharacterSprites() {
+        const directions = ["Idle", "Running", "Walking", "Slashing"];
+        const frameCount = { Idle: 20, Running: 14, Walking: 26, Slashing: 14 };
+
+        characterVariants.forEach((variant) => {
+          images.sprites[`char${variant}`] = {};
+          const spriteFolder = encodeURI(
+            `craftpix-net-938458-free-bloody-alchemist-chibi-character-sprites/Bloody_Alchemist_${variant}/PNG/PNG Sequences/`,
+          );
+          console.log(`Loading character ${variant} from: ${spriteFolder}`);
+
+          directions.forEach((dir) => {
+            images.sprites[`char${variant}`][dir] = [];
+            for (let i = 0; i < frameCount[dir]; i++) {
+              const frameNum = String(i).padStart(3, "0");
+              const img = new Image();
+              const fullPath = `${spriteFolder}${dir}/0_Bloody_Alchemist_${dir}_${frameNum}.png`;
+              img.src = fullPath;
+              images.sprites[`char${variant}`][dir][i] = img;
+              images.total++;
+              img.onload = () => {
+                images.loaded++;
+                console.log(`✅ Loaded: char${variant}/${dir}/${frameNum}`);
+              };
+              img.onerror = (e) => {
+                console.error(`❌ Failed to load sprite: ${fullPath}`);
+                images.total--;
+              };
+            }
+          });
+        });
+      }
+
+      // Particle system for leaves
+      function spawnLeafParticles(x, y, count = 5) {
+        for (let i = 0; i < count; i++) {
+          gameState.particles.push({
+            x: x + (Math.random() - 0.5) * 100,
+            y: y - 50,
+            vx: (Math.random() - 0.5) * 2,
+            vy: Math.random() * 2 + 0.5,
+            life: 1,
+            size: Math.random() * 4 + 2,
+            rotation: Math.random() * Math.PI * 2,
+            color: ["#90EE90", "#7CCD7C", "#98FB98", "#3CB371"][
+              Math.floor(Math.random() * 4)
+            ],
+          });
+        }
+      }
+
+      // Update particles
+      function updateParticles() {
+        gameState.particles = gameState.particles.filter((p) => {
+          p.x += p.vx;
+          p.y += p.vy;
+          p.life -= 0.015;
+          p.rotation += 0.1;
+          return p.life > 0;
+        });
+      }
+
+      // Draw particles
+      function drawParticles(cameraX, cameraY) {
+        gameState.particles.forEach((p) => {
+          const screenX = p.x * TILE_SIZE - cameraX;
+          const screenY = p.y * TILE_SIZE - cameraY;
+
+          ctx.save();
+          ctx.globalAlpha = p.life;
+          ctx.fillStyle = p.color;
+          ctx.translate(screenX, screenY);
+          ctx.rotate(p.rotation);
+          ctx.fillRect(-p.size / 2, -p.size / 2, p.size, p.size);
+          ctx.restore();
+        });
+      }
+
+      // Enemy class
+      class Enemy {
+        constructor(x, y, variant) {
+          this.x = x;
+          this.y = y;
+          this.width = 48;
+          this.height = 48;
+          this.variant = variant;
+          this.direction = "down";
+          this.animationFrame = 0;
+          this.animationTimer = 0;
+          this.health = 30;
+          this.moveTimer = Math.floor(Math.random() * 100);
+          this.moveDirection = Math.random() > 0.5 ? 1 : -1;
+          this.knockback = 0;
+        }
+
+        update(player) {
+          const dx = player.x - this.x;
+          const dy = player.y - this.y;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          // Chase player if close
+          if (distance < 5) {
+            this.x += ((dx / distance) * ENEMY_SPEED) / TILE_SIZE;
+            this.y += ((dy / distance) * ENEMY_SPEED) / TILE_SIZE;
+            this.direction =
+              Math.abs(dx) > Math.abs(dy)
+                ? dx > 0
+                  ? "right"
+                  : "left"
+                : dy > 0
+                  ? "down"
+                  : "up";
+          } else {
+            // Random patrol
+            this.moveTimer--;
+            if (this.moveTimer <= 0) {
+              this.moveDirection = Math.random() > 0.5 ? 1 : -1;
+              this.moveTimer = Math.floor(Math.random() * 60) + 30;
+            }
+
+            if (this.moveTimer % 2 === 0) {
+              this.x += (this.moveDirection * 0.3) / TILE_SIZE;
+            }
+          }
+
+          // Apply knockback
+          if (this.knockback > 0) {
+            this.knockback--;
+          }
+
+          // Boundary check
+          this.x = Math.max(0, Math.min(this.x, WORLD_WIDTH - 0.75));
+          this.y = Math.max(0, Math.min(this.y, WORLD_HEIGHT - 0.75));
+
+          // Animation
+          this.animationTimer++;
+          if (this.animationTimer > 5) {
+            this.animationTimer = 0;
+            this.animationFrame = (this.animationFrame + 1) % 20;
+          }
+        }
+
+        takeDamage(damage) {
+          this.health -= damage;
+          this.knockback = 10;
+          spawnLeafParticles(this.x, this.y, 8);
+        }
+      }
+
+      // Spawn enemy
+      function spawnEnemy() {
+        let x, y;
+        do {
+          x = Math.random() * WORLD_WIDTH;
+          y = Math.random() * WORLD_HEIGHT;
+        } while (
+          Math.abs(x - gameState.player.x) < 4 &&
+          Math.abs(y - gameState.player.y) < 4
+        );
+
+        const variant = [1, 2, 3][Math.floor(Math.random() * 3)];
+        gameState.enemies.push(new Enemy(x, y, variant));
+      }
+
+      // Check slash collision with enemies
+      function checkSlashCollisions() {
+        const px = gameState.player.x;
+        const py = gameState.player.y;
+
+        gameState.enemies = gameState.enemies.filter((enemy) => {
+          const dx = enemy.x - px;
+          const dy = enemy.y - py;
+          const distance = Math.sqrt(dx * dx + dy * dy);
+
+          if (distance < SLASH_RANGE && gameState.player.slashing) {
+            enemy.takeDamage(20);
+            if (enemy.health <= 0) {
+              gameState.player.kills++;
+              spawnLeafParticles(enemy.x, enemy.y, 12);
+              return false;
+            }
+          }
+          return true;
+        });
+      }
+
+      // Generate world map with tiles and objects
+      function generateWorld() {
+        // Create ground tiles
+        for (let y = 0; y < WORLD_HEIGHT; y++) {
+          for (let x = 0; x < WORLD_WIDTH; x++) {
+            const tileTypes = [
+              "Top-Down Simple Summer_Ground 01.png",
+              "Top-Down Simple Summer_Ground 02.png",
+              "Top-Down Simple Summer_Ground 03.png",
+              "Top-Down Simple Summer_Ground 04.png",
+            ];
+
+            const tileType =
+              tileTypes[Math.floor(Math.random() * tileTypes.length)];
+            gameState.tiles.push({
+              x: x,
+              y: y,
+              tileType: tileType,
+            });
+          }
+        }
+
+        // Add some decorative objects
+        const objectTypes = [
+          "Top-Down Simple Summer_Prop - House.png",
+          "Top-Down Simple Summer_Prop - Tree Medium.png",
+          "Top-Down Simple Summer_Prop - Rock 01.png",
+        ];
+
+        // Place objects in a pattern
+        for (let i = 0; i < 15; i++) {
+          let x, y;
+          do {
+            x = Math.floor(Math.random() * WORLD_WIDTH);
+            y = Math.floor(Math.random() * WORLD_HEIGHT);
+          } while (
+            Math.abs(x - gameState.player.x) < 3 &&
+            Math.abs(y - gameState.player.y) < 3
+          );
+
+          gameState.gameObjects.push({
+            x: x,
+            y: y,
+            tileType:
+              objectTypes[Math.floor(Math.random() * objectTypes.length)],
+            width: 64,
+            height: 64,
+          });
+        }
+
+        // Spawn initial enemies
+        for (let i = 0; i < 3; i++) {
+          spawnEnemy();
+        }
+      }
+
+      // Input handling
+      document.addEventListener("keydown", (e) => {
+        gameState.keys[e.key.toLowerCase()] = true;
+
+        // Slash attack
+        if (e.code === "Space" && !gameState.player.slashing) {
+          gameState.player.slashing = true;
+          gameState.player.slashTimer = SLASH_DURATION;
+          spawnLeafParticles(gameState.player.x, gameState.player.y, 20);
+        }
+
+        // Character switching
+        if (e.key === "1" || e.key === "2" || e.key === "3") {
+          gameState.player.variant = parseInt(e.key);
+          spawnLeafParticles(gameState.player.x, gameState.player.y, 10);
+        }
+      });
+
+      document.addEventListener("keyup", (e) => {
+        gameState.keys[e.key.toLowerCase()] = false;
+      });
+
+      // Update game state
+      function update() {
+        const player = gameState.player;
+        let newX = player.x;
+        let newY = player.y;
+        let isMoving = false;
+        let direction = player.direction;
+
+        // Handle movement
+        if (gameState.keys["w"] || gameState.keys["arrowup"]) {
+          newY -= PLAYER_SPEED / TILE_SIZE;
+          direction = "up";
+          isMoving = true;
+        }
+        if (gameState.keys["s"] || gameState.keys["arrowdown"]) {
+          newY += PLAYER_SPEED / TILE_SIZE;
+          direction = "down";
+          isMoving = true;
+        }
+        if (gameState.keys["a"] || gameState.keys["arrowleft"]) {
+          newX -= PLAYER_SPEED / TILE_SIZE;
+          direction = "left";
+          isMoving = true;
+        }
+        if (gameState.keys["d"] || gameState.keys["arrowright"]) {
+          newX += PLAYER_SPEED / TILE_SIZE;
+          direction = "right";
+          isMoving = true;
+        }
+
+        // Boundary check
+        newX = Math.max(0, Math.min(newX, WORLD_WIDTH - 0.75));
+        newY = Math.max(0, Math.min(newY, WORLD_HEIGHT - 0.75));
+
+        player.x = newX;
+        player.y = newY;
+        player.direction = direction;
+        player.isMoving = isMoving;
+
+        // Handle slash
+        if (player.slashing) {
+          player.slashTimer--;
+          if (player.slashTimer <= 0) {
+            player.slashing = false;
+          } else {
+            checkSlashCollisions();
+          }
+        }
+
+        // Animation update
+        if (isMoving) {
+          player.animationTimer++;
+          const animType = player.animationTimer > 20 ? "Running" : "Walking";
+          const maxFrames = animType === "Running" ? 14 : 26;
+
+          if (player.animationTimer > 40) {
+            player.animationTimer = 0;
+            player.animationFrame = (player.animationFrame + 1) % maxFrames;
+          } else {
+            player.animationFrame = Math.floor(
+              (player.animationTimer % 40) / (40 / maxFrames),
+            );
+          }
+        } else if (!player.slashing) {
+          player.animationTimer++;
+          if (player.animationTimer > 5) {
+            player.animationTimer = 0;
+            player.animationFrame = (player.animationFrame + 1) % 20;
+          }
+        }
+
+        // Update enemies
+        gameState.enemies.forEach((enemy) => {
+          enemy.update(player);
+        });
+
+        // Spawn new enemies periodically
+        gameState.enemySpawnTimer++;
+        if (gameState.enemySpawnTimer > 200 && gameState.enemies.length < 8) {
+          spawnEnemy();
+          gameState.enemySpawnTimer = 0;
+        }
+
+        // Update particles
+        updateParticles();
+
+        // Update camera
+        gameState.camera.x =
+          player.x * TILE_SIZE - canvas.width / 2 + TILE_SIZE / 2;
+        gameState.camera.y =
+          player.y * TILE_SIZE - canvas.height / 2 + TILE_SIZE / 2;
+      }
+
+      // Draw functions
+      function drawTile(tile, cameraX, cameraY) {
+        const screenX = tile.x * TILE_SIZE - cameraX;
+        const screenY = tile.y * TILE_SIZE - cameraY;
+
+        if (
+          images.tiles[tile.tileType] &&
+          images.tiles[tile.tileType].complete
+        ) {
+          ctx.drawImage(
+            images.tiles[tile.tileType],
+            screenX,
+            screenY,
+            TILE_SIZE,
+            TILE_SIZE,
+          );
+        } else {
+          ctx.fillStyle = "#7cb342";
+          ctx.fillRect(screenX, screenY, TILE_SIZE, TILE_SIZE);
+          ctx.strokeStyle = "#558b2f";
+          ctx.strokeRect(screenX, screenY, TILE_SIZE, TILE_SIZE);
+        }
+      }
+
+      function drawObject(obj, cameraX, cameraY) {
+        const screenX = obj.x * TILE_SIZE - cameraX;
+        const screenY = obj.y * TILE_SIZE - cameraY;
+
+        if (images.tiles[obj.tileType] && images.tiles[obj.tileType].complete) {
+          ctx.drawImage(
+            images.tiles[obj.tileType],
+            screenX,
+            screenY,
+            obj.width,
+            obj.height,
+          );
+        }
+      }
+
+      function drawPlayer(player, cameraX, cameraY) {
+        const screenX =
+          player.x * TILE_SIZE - cameraX + TILE_SIZE / 2 - player.width / 2;
+        const screenY =
+          player.y * TILE_SIZE - cameraY + TILE_SIZE / 2 - player.height / 2;
+
+        const charKey = `char${player.variant}`;
+        let animType = "Idle";
+        if (player.slashing) {
+          animType = "Slashing";
+        } else if (player.isMoving) {
+          animType = "Running";
+        }
+
+        const frame = Math.max(0, Math.min(player.animationFrame, 19)); // Clamp frame
+        const spriteSet = images.sprites[charKey];
+
+        let drawn = false;
+        if (spriteSet && spriteSet[animType] && spriteSet[animType][frame]) {
+          const img = spriteSet[animType][frame];
+          if (img.complete && img.naturalHeight > 0) {
+            ctx.drawImage(img, screenX, screenY, player.width, player.height);
+            drawn = true;
+          }
+        }
+
+        // Always show placeholder if sprite not loaded
+        if (!drawn) {
+          ctx.fillStyle = "#ff6b6b";
+          ctx.fillRect(screenX, screenY, player.width, player.height);
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 12px Arial";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            "P",
+            screenX + player.width / 2,
+            screenY + player.height / 2 + 4,
+          );
+          ctx.textAlign = "left";
+        }
+
+        // Draw slash effect
+        if (player.slashing) {
+          ctx.strokeStyle = "rgba(255, 100, 100, 0.8)";
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(
+            screenX + player.width / 2,
+            screenY + player.height / 2,
+            SLASH_RANGE * TILE_SIZE,
+            0,
+            Math.PI * 2,
+          );
+          ctx.stroke();
+        }
+      }
+
+      function drawEnemy(enemy, cameraX, cameraY) {
+        const screenX =
+          enemy.x * TILE_SIZE - cameraX + TILE_SIZE / 2 - enemy.width / 2;
+        const screenY =
+          enemy.y * TILE_SIZE - cameraY + TILE_SIZE / 2 - enemy.height / 2;
+
+        const charKey = `char${enemy.variant}`;
+        const frame = Math.max(0, Math.min(enemy.animationFrame, 19)); // Clamp frame
+        const spriteSet = images.sprites[charKey];
+
+        let drawn = false;
+        if (spriteSet && spriteSet["Idle"] && spriteSet["Idle"][frame]) {
+          const img = spriteSet["Idle"][frame];
+          if (img.complete && img.naturalHeight > 0) {
+            ctx.drawImage(img, screenX, screenY, enemy.width, enemy.height);
+            drawn = true;
+          }
+        }
+
+        // Always show placeholder if sprite not loaded
+        if (!drawn) {
+          ctx.fillStyle = "#ff8c42";
+          ctx.fillRect(screenX, screenY, enemy.width, enemy.height);
+          ctx.fillStyle = "#fff";
+          ctx.font = "bold 12px Arial";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            "E",
+            screenX + enemy.width / 2,
+            screenY + enemy.height / 2 + 4,
+          );
+          ctx.textAlign = "left";
+        }
+
+        // Health bar
+        const healthBarWidth = 40;
+        const healthBarHeight = 4;
+        ctx.fillStyle = "#333";
+        ctx.fillRect(
+          screenX + enemy.width / 2 - healthBarWidth / 2,
+          screenY - 10,
+          healthBarWidth,
+          healthBarHeight,
+        );
+        ctx.fillStyle = "#ff0000";
+        ctx.fillRect(
+          screenX + enemy.width / 2 - healthBarWidth / 2,
+          screenY - 10,
+          (enemy.health / 30) * healthBarWidth,
+          healthBarHeight,
+        );
+      }
+
+      function render() {
+        // Clear canvas
+        ctx.fillStyle = "#87ceeb";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const cameraX = gameState.camera.x;
+        const cameraY = gameState.camera.y;
+
+        // Draw ground tiles
+        gameState.tiles.forEach((tile) => {
+          drawTile(tile, cameraX, cameraY);
+        });
+
+        // Draw game objects
+        gameState.gameObjects.forEach((obj) => {
+          drawObject(obj, cameraX, cameraY);
+        });
+
+        // Draw enemies
+        gameState.enemies.forEach((enemy) => {
+          drawEnemy(enemy, cameraX, cameraY);
+        });
+
+        // Draw player
+        drawPlayer(gameState.player, cameraX, cameraY);
+
+        // Draw particles
+        drawParticles(cameraX, cameraY);
+
+        // Draw UI
+        ctx.fillStyle = "rgba(0, 0, 0, 0.6)";
+        ctx.fillRect(10, 10, 320, 120);
+
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 16px Arial";
+        ctx.fillText("🌞 Summer Adventure", 20, 32);
+
+        ctx.font = "12px Arial";
+        ctx.fillText(
+          `Character: ${gameState.player.variant} (Press 1/2/3 to switch)`,
+          20,
+          50,
+        );
+        ctx.fillText(
+          `Enemies: ${gameState.enemies.length} | Kills: ${gameState.player.kills}`,
+          20,
+          68,
+        );
+        ctx.fillText(`Sprites: ${images.loaded}/${images.total}`, 20, 86);
+        ctx.fillText(
+          `Position: (${gameState.player.x.toFixed(1)}, ${gameState.player.y.toFixed(1)})`,
+          20,
+          104,
+        );
+
+        // Draw controls
+        ctx.font = "11px Arial";
+        ctx.fillStyle = "#aaa";
+        ctx.fillText(
+          `[SPACE] Slash | [WASD/Arrows] Move`,
+          10,
+          canvas.height - 10,
+        );
+      }
+
+      // Game loop
+      let lastTime = Date.now();
+      let frameCount = 0;
+
+      function gameLoop() {
+        const currentTime = Date.now();
+        frameCount++;
+
+        if (currentTime - lastTime >= 1000) {
+          document.getElementById("stats").textContent =
+            `FPS: ${frameCount} | Enemies: ${gameState.enemies.length} | Kills: ${gameState.player.kills}`;
+          frameCount = 0;
+          lastTime = currentTime;
+        }
+
+        update();
+        render();
+        requestAnimationFrame(gameLoop);
+      }
+
+      // Start game
+      function init() {
+        console.log("🎮 Game Initializing...");
+        console.log("Loading tileset...");
+        loadTileset();
+        console.log("Loading character sprites...");
+        loadCharacterSprites();
+        console.log("Generating world...");
+        generateWorld();
+        console.log("✅ Game started!");
+        gameLoop();
+      }
+
+      init();
+    </script>
+  </body>
+</html>
